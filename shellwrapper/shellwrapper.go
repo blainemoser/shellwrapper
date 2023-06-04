@@ -25,31 +25,29 @@ const (
 )
 
 var (
+	Testing          = false
 	disp             = []string{"/", "-", "\\", "|"}
-	Testing   bool   = false
 	errorUUID string = uuid.NewString()
 )
 
 type (
 	Shell struct {
-		StdIn               io.Reader
-		Reader              *bufio.Reader
-		OsInterrupt         chan os.Signal
-		UserInput           chan string
-		LastCaptured        chan string
-		Buffer              *list.List
-		cancel              chan struct{}
-		quit                chan struct{}
-		bufferSize          int
-		flow                *Flow
-		branches            map[string]FlowFunc
-		writer              *uilive.Writer
-		wait                chan struct{}
-		shellOutChan        chan bool
-		greeter             []string
-		lastSetInputs       []string
-		firstInstructed     bool
-		firstInstructionSet bool
+		StdIn         io.Writer
+		Reader        *bufio.Reader
+		OsInterrupt   chan os.Signal
+		UserInput     chan string
+		LastCaptured  chan string
+		Buffer        *list.List
+		cancel        chan struct{}
+		quit          chan struct{}
+		bufferSize    int
+		flow          *Flow
+		branches      map[string]FlowFunc
+		writer        *uilive.Writer
+		wait          chan struct{}
+		shellOutChan  chan bool
+		greeter       []string
+		lastSetInputs []string
 	}
 
 	BufferObject struct {
@@ -178,7 +176,7 @@ func (s *Shell) ThenQuit(message string) *Shell {
 	if flow == nil {
 		return s
 	}
-	flow.Exec = func(ctx context.Context, cancel context.CancelFunc) error {
+	flow.Quit = func(ctx context.Context, cancel context.CancelFunc) error {
 		s.Display("> "+message, false)
 		<-s.exit()
 		return nil
@@ -403,6 +401,11 @@ func (s *Shell) runFlowFunc() {
 		}
 		s.flow.Executed = true
 	}
+	if s.flow.Quit != nil {
+		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Quit); err != nil {
+			s.bufferError(err)
+		}
+	}
 	if s.flow.Flow != nil {
 		s.flow.Flow()
 	}
@@ -431,10 +434,6 @@ func (s *Shell) capture(command *string) {
 }
 
 func (s *Shell) waitForShellOutput(input, msg string, overwrite, hidden bool) {
-	if Testing {
-		s.shellOutput(input, msg, overwrite, hidden)
-		return
-	}
 	// if not in testing drain the channel
 	<-s.shellOutput(input, msg, overwrite, hidden)
 }
@@ -475,6 +474,7 @@ func (s *Shell) bufferError(err error) {
 func (s *Shell) waitForInput() {
 	s.instruct()
 	userInput, err := s.Reader.ReadString('\n')
+	// fmt.Println(s.stdin.(*bytes.buffer).len(), "here")
 	if err != nil && userInput == "\n" {
 		err = errors.New("carriage_return")
 	}
@@ -485,6 +485,7 @@ func (s *Shell) waitForInput() {
 	s.special(&userInput)
 	if userInput == "" {
 		s.UserInput <- errorUUID
+		return
 	}
 	s.emptyUserInput(&userInput)
 	s.UserInput <- userInput
@@ -524,14 +525,17 @@ func (s *Shell) loadScreen(pos int, message string) int {
 	return pos
 }
 
-func getIO() (stdIn io.Reader, reader *bufio.Reader) {
+func getIO() (StdIn io.Writer, reader *bufio.Reader) {
 	if Testing {
 		var b []byte
-		stdIn = bytes.NewReader(b)
-	} else {
-		stdIn = os.Stdin
+		in := bytes.NewBuffer(b)
+		reader = bufio.NewReader(in)
+		StdIn = in
+		return
 	}
-	reader = bufio.NewReader(stdIn)
+	in := os.Stdin
+	reader = bufio.NewReader(in)
+	StdIn = in
 	return
 }
 
@@ -558,7 +562,7 @@ func (s *Shell) lastCommand() string {
 	for e := s.Buffer.Front(); e != nil; e = e.Next() {
 		if e.Value != nil {
 			if add, ok := e.Value.(*BufferObject); ok {
-				if len(add.In) < 0 {
+				if len(add.In) < 1 {
 					continue
 				}
 				return add.In
