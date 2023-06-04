@@ -39,7 +39,8 @@ type (
 		UserInput           chan string
 		LastCaptured        chan string
 		Buffer              *list.List
-		Cancel              chan struct{}
+		cancel              chan struct{}
+		quit                chan struct{}
 		bufferSize          int
 		flow                *flow.Flow
 		branches            map[string]flow.FlowFunc
@@ -82,7 +83,8 @@ func NewShell() *Shell {
 		OsInterrupt:  c,
 		LastCaptured: make(chan string, 1),
 		shellOutChan: make(chan bool, 1),
-		Cancel:       make(chan struct{}, 1),
+		cancel:       make(chan struct{}, 1),
+		quit:         make(chan struct{}),
 		Buffer:       list.New(),
 		branches:     make(map[string]flow.FlowFunc),
 		bufferSize:   10,
@@ -179,7 +181,7 @@ func (s *Shell) ThenQuit(message string) *Shell {
 	}
 	flow.Exec = func(ctx context.Context, cancel context.CancelFunc) error {
 		s.Display("> "+message, false)
-		s.quit()
+		<-s.exit()
 		return nil
 	}
 	return s
@@ -217,14 +219,14 @@ func (s *Shell) Display(message string, overwrite bool) {
 // Start starts the shell programme
 func (s *Shell) Start() {
 	go s.running()
-	<-s.Cancel
-	fmt.Println("> exiting...")
+	<-s.cancel
+	s.Display("> exiting...", false)
 	s.writer.Stop()
 }
 
 // Quit quits the shell programme
 func (s *Shell) Quit() {
-	s.quit()
+	<-s.exit()
 }
 
 func (s *Shell) insertFlow() *flow.Flow {
@@ -302,6 +304,7 @@ func (j *jitter) displayError(s *Shell) {
 }
 
 func (j *jitter) displayDone(s *Shell) {
+	// s.Display("done, yo", false)
 	s.Display(fmt.Sprintf("> %s %s", j.message, " ...done"), true)
 }
 
@@ -343,9 +346,9 @@ func (s *Shell) greeting() {
 	fmt.Print("\t" + line + "\n\n\t" + strings.Join(msg, "\n\t") + "\n\t" + line + "\n\n")
 }
 
-func (s *Shell) quit() bool {
-	s.Cancel <- struct{}{}
-	return true
+func (s *Shell) exit() <-chan struct{} {
+	s.cancel <- struct{}{}
+	return s.quit
 }
 
 func (s *Shell) running() {
@@ -353,10 +356,11 @@ func (s *Shell) running() {
 	go s.waitForInput()
 	for {
 		select {
-		case <-s.Cancel:
+		case <-s.cancel:
+			close(s.quit)
 			return
 		case <-s.OsInterrupt:
-			s.Cancel <- struct{}{}
+			s.cancel <- struct{}{}
 			return
 		case command := <-s.UserInput:
 			s.capture(&command)
@@ -373,7 +377,8 @@ func (s *Shell) handleCommand(command string) bool {
 	case errorUUID:
 		return false
 	case QUIT, EXIT:
-		return s.quit()
+		<-s.exit()
+		return false
 	}
 	if result := s.flowCommand(command); result != nil {
 		return *result

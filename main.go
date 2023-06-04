@@ -25,10 +25,11 @@ func main() {
 			})
 		}).
 		IfUserInputs("yes", "y", "YES", "ye", "Y", "YE").
+		Default("yes").
 		ThenRun(func(ctx context.Context, cancel context.CancelFunc) error {
 			// When using timeouts the function is responsible for
 			// dealing with context deadlines from the shell
-			time.Sleep(time.Second * 2)
+			time.Sleep(time.Second * 4)
 			for {
 				select {
 				case <-ctx.Done():
@@ -44,9 +45,5 @@ func main() {
 		GoTo("next", "alright, it's been installed. Say yes!").
 		IfUserInputs("no").
 		GoTo("next", "fine, don't install it. See if I care. Say yes!").
-		Default("yes").
-		WithTimeout(3000).
-		WithLoadingMessage("waiting for you to go away...").
-		Default("yes").
 		Start()
 }
