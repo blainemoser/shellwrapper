@@ -18,33 +18,33 @@ func main() {
 	).
 		SetBufferSize(20).
 		FirstInstruction("would you like to install the programme?").
-		IfUserInputs("yes", "y", "YES", "ye", "Y", "YE").
-		ThenBranch("please try something", func() {
-			sh.IfUserInputs("hello", "HELLO", "h").
-				ThenBranch("really though...", func() {
-					sh.IfUserInputs("yes", "no").
-						Default("no").
-						ThenQuit("thanks for installing hello!")
-				}).
-				IfUserInputs("goodbye", "GOODBYE", "gb").
-				Default("hello").
-				ThenQuit("thanks for installing goodbye!")
+		Branch("next", func() {
+			sh.IfUserInputs("yes").Default("yes").ThenQuit("bye!").IfUserInputs("no").ThenBranch("why not?", func() {
+				sh.IfUserInputs("don't know", "dk").ThenQuit("sorry to hear that").
+					IfUserInputs("because", "b").ThenQuit("fair enough.")
+			})
 		}).
-		IfUserInputs("no", "NO", "N", "n").
+		IfUserInputs("yes", "y", "YES", "ye", "Y", "YE").
 		ThenRun(func(ctx context.Context, cancel context.CancelFunc) error {
 			// When using timeouts the function is responsible for
 			// dealing with context deadlines from the shell
-			time.Sleep(time.Second * 4)
+			time.Sleep(time.Second * 2)
 			for {
 				select {
 				case <-ctx.Done():
 					return fmt.Errorf("no bueno")
 				default:
-					sh.Quit()
+					// sh.Quit()
 					return nil
 				}
 			}
 		}).
+		WithTimeout(3500).
+		WithLoadingMessage("waiting for some cows to come back").
+		GoTo("next", "alright, it's been installed. Say yes!").
+		IfUserInputs("no").
+		GoTo("next", "fine, don't install it. See if I care. Say yes!").
+		Default("yes").
 		WithTimeout(3000).
 		WithLoadingMessage("waiting for you to go away...").
 		Default("yes").

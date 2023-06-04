@@ -20,6 +20,9 @@ import (
 
 const (
 	JITTER_TIME = 140
+	BACK        = "back"
+	QUIT        = "quit"
+	EXIT        = "exit"
 )
 
 var (
@@ -39,10 +42,10 @@ type (
 		Cancel              chan struct{}
 		bufferSize          int
 		flow                *flow.Flow
+		branches            map[string]flow.FlowFunc
 		writer              *uilive.Writer
 		wait                chan struct{}
 		shellOutChan        chan bool
-		welcomeMsg          string
 		greeter             []string
 		lastSetInputs       []string
 		firstInstructed     bool
@@ -56,9 +59,18 @@ type (
 		hidden bool
 	}
 
-	Callback func() error
+	jitter struct {
+		waitFor     int
+		message     string
+		cancel      context.CancelFunc
+		ctx         context.Context
+		jitterEnded chan struct{}
+		pos         int
+		count       int
+	}
 )
 
+// NewShell returns a new pointer to Shell
 func NewShell() *Shell {
 	stdIn, reader := getIO()
 	c := make(chan os.Signal, 1)
@@ -72,6 +84,7 @@ func NewShell() *Shell {
 		shellOutChan: make(chan bool, 1),
 		Cancel:       make(chan struct{}, 1),
 		Buffer:       list.New(),
+		branches:     make(map[string]flow.FlowFunc),
 		bufferSize:   10,
 		flow:         flow.New(), // the root node, if you will
 		writer:       getWriter(),
@@ -79,16 +92,23 @@ func NewShell() *Shell {
 	}
 }
 
+// SetGreeting Sets the greeting display for your shell programme
+// each ...string passed is a new line in the greeting
 func (s *Shell) SetGreeting(greeting ...string) *Shell {
 	s.greeter = greeting
 	return s
 }
 
+// SetBufferSize Sets the buffer size for the programme; a buffer-item is
+// an input or output
 func (s *Shell) SetBufferSize(bufferSize int) *Shell {
 	s.bufferSize = bufferSize
 	return s
 }
 
+// IfUserInputs Sets up the behaviour for your programme to respond to
+// a user's input. input here is variadic so that you can
+// set alternatives, for example yes, YES, y and Y
 func (s *Shell) IfUserInputs(input ...string) *Shell {
 	s.lastSetInputs = input
 	s.flow.Commands = append(s.flow.Commands, input[0])
@@ -96,18 +116,21 @@ func (s *Shell) IfUserInputs(input ...string) *Shell {
 	return s
 }
 
+// Default Sets a default command to be run for when the user
+// hits return without providing an input
 func (s *Shell) Default(def string) *Shell {
 	s.flow.Default = def
 	return s
 }
 
-// Set the first instruction that will appear in the shell
+// FirstInstruction Sets the first instruction that will appear in the shell
 // For example 'what is your name?'
 func (s *Shell) FirstInstruction(instruction string) *Shell {
 	s.flow.Instruction = instruction
 	return s
 }
 
+// ThenRun runs the passed function f after a condition has been met
 func (s *Shell) ThenRun(f flow.ExecFunc) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
@@ -117,6 +140,8 @@ func (s *Shell) ThenRun(f flow.ExecFunc) *Shell {
 	return s
 }
 
+// ThenBranch runs the callback function f after a condition has been met.
+// The function f should contain further branching rules
 func (s *Shell) ThenBranch(instruction string, f flow.FlowFunc) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
@@ -127,19 +152,42 @@ func (s *Shell) ThenBranch(instruction string, f flow.FlowFunc) *Shell {
 	return s
 }
 
+// Branch lets the programmer create a branch in memory that can
+// be visited at a later stage using GoTo
+func (s *Shell) Branch(name string, f flow.FlowFunc) *Shell {
+	s.branches[name] = f
+	return s
+}
+
+// GoTo lets the programmer specify a "go to" on saved Branches,
+// so that the Branch's branching rules will be applied
+// after a condition has been met
+func (s *Shell) GoTo(name string, instruction string) *Shell {
+	branch, ok := s.branches[name]
+	if !ok {
+		panic(fmt.Sprintf("branch %s not found", name))
+	}
+	s.ThenBranch(instruction, branch)
+	return s
+}
+
+// ThenQuit quits the programme after some condition has been met
 func (s *Shell) ThenQuit(message string) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
 		return s
 	}
 	flow.Exec = func(ctx context.Context, cancel context.CancelFunc) error {
-		s.Display("> " + message)
+		s.Display("> "+message, false)
 		s.quit()
 		return nil
 	}
 	return s
 }
 
+// WithTimeout specifies the maximum execution time of a function
+// passed into ThenRun. If this is exceeded, a timeout error will be
+// generated
 func (s *Shell) WithTimeout(timeout uint) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
@@ -149,6 +197,8 @@ func (s *Shell) WithTimeout(timeout uint) *Shell {
 	return s
 }
 
+// WithLoadingMessage specifies the message that will be displayed
+// while a function passed into ThenRun is executing
 func (s *Shell) WithLoadingMessage(message string) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
@@ -158,27 +208,43 @@ func (s *Shell) WithLoadingMessage(message string) *Shell {
 	return s
 }
 
-func (s *Shell) Display(message string) {
-	fmt.Fprintln(s.writer, message)
+// Display displays a message; if overwrite is false, it is displayed
+// as a new line
+func (s *Shell) Display(message string, overwrite bool) {
+	s.waitForShellOutput("", message, overwrite, false)
 }
 
+// Start starts the shell programme
+func (s *Shell) Start() {
+	go s.running()
+	<-s.Cancel
+	fmt.Println("> exiting...")
+	s.writer.Stop()
+}
+
+// Quit quits the shell programme
 func (s *Shell) Quit() {
 	s.quit()
 }
 
-func (s *Shell) insertFlow() {
+func (s *Shell) insertFlow() *flow.Flow {
 	flow := flow.New()
 	for _, input := range s.lastSetInputs {
-		if input == "exit" || input == "quit" || input == "back" {
+		if s.reservedWord(input) {
 			continue
 		}
 		s.flow.Flows[input] = flow
 	}
+	return flow
+}
+
+func (s *Shell) reservedWord(input string) bool {
+	return input == EXIT || input == QUIT || input == BACK
 }
 
 func (s *Shell) findLastFlow() *flow.Flow {
 	for _, input := range s.lastSetInputs {
-		if input == "exit" || input == "quit" || input == "back" {
+		if s.reservedWord(input) {
 			continue
 		}
 		flow, ok := s.flow.Flows[input]
@@ -197,40 +263,69 @@ func (s *Shell) findFlow(command string) *flow.Flow {
 	return flow
 }
 
-func (s *Shell) runFunc(waitFor int, message string, callback flow.ExecFunc) error {
+func (s *Shell) newJitter(waitFor int, message string) *jitter {
 	ctx, cancel := context.WithCancel(context.Background())
+	jitterEnded := make(chan struct{}, 1)
+	return &jitter{
+		ctx:         ctx,
+		cancel:      cancel,
+		jitterEnded: jitterEnded,
+		waitFor:     waitFor,
+		message:     message,
+		pos:         0,
+		count:       0,
+	}
+}
+
+func (s *Shell) runFunc(waitFor int, message string, callback flow.ExecFunc) error {
+	jitter := s.newJitter(waitFor, message)
 	go func() {
-		s.jitter(waitFor, message, cancel)
+		s.jitter(jitter)
 	}()
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-jitter.ctx.Done():
+			err := jitter.ctx.Err()
+			<-jitter.jitterEnded
+			return err
 		default:
-			return callback(ctx, cancel)
+			err := callback(jitter.ctx, jitter.cancel)
+			jitter.cancel()
+			<-jitter.jitterEnded
+			return err
 		}
 	}
 }
 
-func (s *Shell) jitter(waitFor int, message string, cancel context.CancelFunc) {
+func (j *jitter) displayError(s *Shell) {
+	s.Display(fmt.Sprintf("> %s %s", j.message, " ...error"), true)
+}
+
+func (j *jitter) displayDone(s *Shell) {
+	s.Display(fmt.Sprintf("> %s %s", j.message, " ...done"), true)
+}
+
+func (s *Shell) jitter(j *jitter) {
 	defer s.writer.Flush()
-	pos := 0
 	load := time.NewTicker(time.Millisecond * JITTER_TIME)
 	defer load.Stop()
-	count := 0
-	for range load.C {
-		count += JITTER_TIME
-		pos = s.loadScreen(pos, message)
-		if count > waitFor {
-			cancel()
-			break
+	for {
+		select {
+		case <-load.C:
+			j.count += JITTER_TIME
+			j.pos = s.loadScreen(j.pos, j.message)
+			if j.count > j.waitFor {
+				j.cancel()
+				j.displayError(s)
+				j.jitterEnded <- struct{}{}
+				return
+			}
+		case <-j.ctx.Done():
+			j.displayDone(s)
+			j.jitterEnded <- struct{}{}
+			return
 		}
 	}
-}
-
-func (s *Shell) WithWelcomeMessage(message string) *Shell {
-	s.welcomeMsg = message
-	return s
 }
 
 func (s *Shell) greeting() {
@@ -246,22 +341,6 @@ func (s *Shell) greeting() {
 		line += "_"
 	}
 	fmt.Print("\t" + line + "\n\n\t" + strings.Join(msg, "\n\t") + "\n\t" + line + "\n\n")
-}
-
-func (s *Shell) Start() {
-	if Testing {
-		go s.running()
-		return
-	}
-	go s.running()
-	<-s.Cancel
-	fmt.Println("> exiting...")
-	close(s.shellOutChan)
-	close(s.LastCaptured)
-	close(s.Cancel)
-	close(s.OsInterrupt)
-	close(s.UserInput)
-	s.writer.Stop()
 }
 
 func (s *Shell) quit() bool {
@@ -291,14 +370,9 @@ func (s *Shell) running() {
 
 func (s *Shell) handleCommand(command string) bool {
 	switch command {
-	case "":
-		if len(s.flow.Default) < 1 {
-			return false
-		}
-		command = s.flow.Default
 	case errorUUID:
 		return false
-	case "quit", "exit":
+	case QUIT, EXIT:
 		return s.quit()
 	}
 	if result := s.flowCommand(command); result != nil {
@@ -319,14 +393,14 @@ func (s *Shell) flowCommand(command string) *bool {
 }
 
 func (s *Shell) runFlowFunc() {
-	if s.flow.Flow != nil {
-		s.flow.Flow()
-		return
-	}
-	if s.flow.Exec != nil {
+	if s.flow.Exec != nil && !s.flow.Executed {
 		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Exec); err != nil {
 			s.bufferError(err)
 		}
+		s.flow.Executed = true
+	}
+	if s.flow.Flow != nil {
+		s.flow.Flow()
 	}
 }
 
@@ -337,6 +411,7 @@ func (s *Shell) badCommand(command string) bool {
 			"> unrecognised command '%s'",
 			strings.ReplaceAll(command, "\n", ""),
 		),
+		false,
 		false,
 	)
 	return false
@@ -351,16 +426,16 @@ func (s *Shell) capture(command *string) {
 	s.LastCaptured <- *command
 }
 
-func (s *Shell) waitForShellOutput(input, msg string, hidden bool) {
+func (s *Shell) waitForShellOutput(input, msg string, overwrite, hidden bool) {
 	if Testing {
-		s.shellOutput(input, msg, hidden)
+		s.shellOutput(input, msg, overwrite, hidden)
 		return
 	}
 	// if not in testing drain the channel
-	<-s.shellOutput(input, msg, hidden)
+	<-s.shellOutput(input, msg, overwrite, hidden)
 }
 
-func (s *Shell) shellOutput(input, msg string, hidden bool) <-chan bool {
+func (s *Shell) shellOutput(input, msg string, overwrite, hidden bool) <-chan bool {
 	b := &BufferObject{
 		In:     input,
 		Out:    msg,
@@ -372,7 +447,11 @@ func (s *Shell) shellOutput(input, msg string, hidden bool) <-chan bool {
 		s.Buffer.Remove(e)
 	}
 	s.Buffer.PushFront(b)
-	fmt.Println(msg)
+	if overwrite {
+		fmt.Fprintln(s.writer, msg)
+	} else {
+		fmt.Println(msg)
+	}
 	s.shellOutChan <- true
 	return s.shellOutChan
 }
@@ -385,7 +464,7 @@ func (s *Shell) bufferError(err error) {
 		s.UserInput <- errorUUID
 		return
 	default:
-		s.waitForShellOutput(errorUUID, fmt.Sprintf("> An error occured (%s), please try again", err.Error()), true)
+		s.waitForShellOutput(errorUUID, fmt.Sprintf("> An error occured (%s), please try again", err.Error()), false, true)
 	}
 }
 
@@ -403,21 +482,35 @@ func (s *Shell) waitForInput() {
 	if userInput == "" {
 		s.UserInput <- errorUUID
 	}
-	userInput = strings.TrimSuffix(userInput, "\n")
+	s.emptyUserInput(&userInput)
 	s.UserInput <- userInput
 }
 
+func (s *Shell) emptyUserInput(userInput *string) {
+	*userInput = strings.TrimSuffix(*userInput, "\n")
+	if len(*userInput) < 1 && len(s.flow.Default) > 0 {
+		*userInput = s.flow.Default
+		s.waitForShellOutput(*userInput, *userInput, false, false)
+	}
+}
+
+func (s *Shell) emptyFlow() bool {
+	return len(s.flow.Commands) < 1
+}
+
 func (s *Shell) instruct() {
+	if s.emptyFlow() {
+		return
+	}
 	instruction := fmt.Sprintf("> %s [options: %s]", s.flow.Instruction, strings.Join(s.flow.Commands, ", "))
 	if len(s.flow.Default) > 0 {
 		instruction = fmt.Sprintf("%s (default '%s')", instruction, s.flow.Default)
 	}
-	fmt.Println(instruction)
-	fmt.Print("> ")
+	s.waitForShellOutput("", instruction, false, false)
 }
 
 func (s *Shell) loadScreen(pos int, message string) int {
-	s.Display(fmt.Sprintf("> %s %s", message, disp[pos]))
+	s.Display(fmt.Sprintf("> %s %s", message, disp[pos]), true)
 	if pos == 3 {
 		pos = 0
 	} else {

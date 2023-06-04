@@ -12,6 +12,7 @@ type (
 		Default        string
 		WaitTime       int
 		LoadingMessage string
+		Executed       bool
 	}
 
 	FlowFunc func()
