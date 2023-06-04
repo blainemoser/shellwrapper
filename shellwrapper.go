@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blainemoser/shellwrapper/flow"
 	"github.com/google/uuid"
 	"github.com/gosuri/uilive"
 )
@@ -42,8 +41,8 @@ type (
 		cancel              chan struct{}
 		quit                chan struct{}
 		bufferSize          int
-		flow                *flow.Flow
-		branches            map[string]flow.FlowFunc
+		flow                *Flow
+		branches            map[string]FlowFunc
 		writer              *uilive.Writer
 		wait                chan struct{}
 		shellOutChan        chan bool
@@ -86,9 +85,9 @@ func NewShell() *Shell {
 		cancel:       make(chan struct{}),
 		quit:         make(chan struct{}),
 		Buffer:       list.New(),
-		branches:     make(map[string]flow.FlowFunc),
+		branches:     make(map[string]FlowFunc),
 		bufferSize:   10,
-		flow:         flow.New(), // the root node, if you will
+		flow:         NewFlow(), // the root node, if you will
 		writer:       getWriter(),
 		wait:         make(chan struct{}),
 	}
@@ -133,7 +132,7 @@ func (s *Shell) FirstInstruction(instruction string) *Shell {
 }
 
 // ThenRun runs the passed function f after a condition has been met
-func (s *Shell) ThenRun(f flow.ExecFunc) *Shell {
+func (s *Shell) ThenRun(f ExecFunc) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
 		return s
@@ -144,7 +143,7 @@ func (s *Shell) ThenRun(f flow.ExecFunc) *Shell {
 
 // ThenBranch runs the callback function f after a condition has been met.
 // The function f should contain further branching rules
-func (s *Shell) ThenBranch(instruction string, f flow.FlowFunc) *Shell {
+func (s *Shell) ThenBranch(instruction string, f FlowFunc) *Shell {
 	flow := s.findLastFlow()
 	if flow == nil {
 		return s
@@ -156,7 +155,7 @@ func (s *Shell) ThenBranch(instruction string, f flow.FlowFunc) *Shell {
 
 // Branch lets the programmer create a branch in memory that can
 // be visited at a later stage using GoTo
-func (s *Shell) Branch(name string, f flow.FlowFunc) *Shell {
+func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 	s.branches[name] = f
 	return s
 }
@@ -229,8 +228,8 @@ func (s *Shell) Quit() {
 	<-s.exit()
 }
 
-func (s *Shell) insertFlow() *flow.Flow {
-	flow := flow.New()
+func (s *Shell) insertFlow() *Flow {
+	flow := NewFlow()
 	for _, input := range s.lastSetInputs {
 		if s.reservedWord(input) {
 			continue
@@ -244,7 +243,7 @@ func (s *Shell) reservedWord(input string) bool {
 	return input == EXIT || input == QUIT || input == BACK
 }
 
-func (s *Shell) findLastFlow() *flow.Flow {
+func (s *Shell) findLastFlow() *Flow {
 	for _, input := range s.lastSetInputs {
 		if s.reservedWord(input) {
 			continue
@@ -257,7 +256,7 @@ func (s *Shell) findLastFlow() *flow.Flow {
 	return nil
 }
 
-func (s *Shell) findFlow(command string) *flow.Flow {
+func (s *Shell) findFlow(command string) *Flow {
 	flow, ok := s.flow.Flows[command]
 	if !ok {
 		return nil
@@ -279,7 +278,7 @@ func (s *Shell) newJitter(waitFor int, message string) *jitter {
 	}
 }
 
-func (s *Shell) runFunc(waitFor int, message string, callback flow.ExecFunc) error {
+func (s *Shell) runFunc(waitFor int, message string, callback ExecFunc) error {
 	jitter := s.newJitter(waitFor, message)
 	go func() {
 		s.jitter(jitter)

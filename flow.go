@@ -1,4 +1,4 @@
-package flow
+package shellwrapper
 
 import "context"
 
@@ -20,7 +20,7 @@ type (
 	Flows    map[string]*Flow
 )
 
-func New() *Flow {
+func NewFlow() *Flow {
 	return &Flow{
 		Flows:    make(Flows),
 		Commands: make([]string, 0),
