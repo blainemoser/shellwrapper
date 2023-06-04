@@ -91,7 +91,7 @@ func (s *Shell) SetBufferSize(bufferSize int) *Shell {
 
 func (s *Shell) IfUserInputs(input ...string) *Shell {
 	s.lastSetInputs = input
-	s.flow.Commands = append(s.flow.Commands, input...)
+	s.flow.Commands = append(s.flow.Commands, input[0])
 	s.insertFlow()
 	return s
 }
