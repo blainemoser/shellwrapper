@@ -20,9 +20,15 @@ func main() {
 		FirstInstruction("would you like to install the programme?").
 		IfUserInputs("yes", "y", "YES", "ye", "Y", "YE").
 		ThenBranch("please try something", func() {
-			sh.IfUserInputs("hello", "there").ThenBranch("really though...", func() {
-				sh.IfUserInputs("yes", "no").Default("no").ThenQuit("thanks for installing!")
-			})
+			sh.IfUserInputs("hello", "HELLO", "h").
+				ThenBranch("really though...", func() {
+					sh.IfUserInputs("yes", "no").
+						Default("no").
+						ThenQuit("thanks for installing hello!")
+				}).
+				IfUserInputs("goodbye", "GOODBYE", "gb").
+				Default("hello").
+				ThenQuit("thanks for installing goodbye!")
 		}).
 		IfUserInputs("no", "NO", "N", "n").
 		ThenRun(func(ctx context.Context, cancel context.CancelFunc) error {
