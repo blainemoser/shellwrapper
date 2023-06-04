@@ -51,20 +51,32 @@ func TestFlowConditions(t *testing.T) {
 	var message string
 	sh.SetGreeting("welcome to the test shell").FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
 		time.Sleep(time.Second * 2)
-		message = "hello from shell test"
-		sh.Display(message, false)
-		return nil
-	}).ThenQuit("thank you")
+		for {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("timeout (expected)")
+			default:
+				// sh.Quit()
+				return nil
+			}
+		}
+		// sh.Display(message, false)
+		// message = "hello from shell test"
+		// return nil
+	}).WithTimeout(10).ThenQuit("thank you")
 	go sh.Start()
-	// bufferOutput()
+	bufferOutput()
 	// copy the output in a separate goroutine so printing can't block indefinitely
 	time.Sleep(time.Second * 2)
 	// sh.UserInput <- string([]byte{27, 91, 65})
 	sh.StdIn.(*bytes.Buffer).WriteString(string([]byte{27, 91, 65}) + "\n") // test special
 	sh.waitForInput()
+	time.Sleep(time.Second * 1)
+	sh.StdIn.(*bytes.Buffer).WriteString("yes\n") // test special
+	sh.waitForInput()
 	time.Sleep(time.Second * 4)
 	// fmt.Fprintln(sh.StdIn, "worse_commdng")
-	// fmt.Print("this is what we've got... " + getOutput() + "ere")
+	fmt.Print(getOutput() + "ere")
 	fmt.Println(message)
 	fmt.Println(sh.flow.Executed)
 }
