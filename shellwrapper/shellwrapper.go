@@ -83,7 +83,7 @@ func NewShell() *Shell {
 		OsInterrupt:  c,
 		LastCaptured: make(chan string, 1),
 		shellOutChan: make(chan bool, 1),
-		cancel:       make(chan struct{}, 1),
+		cancel:       make(chan struct{}),
 		quit:         make(chan struct{}),
 		Buffer:       list.New(),
 		branches:     make(map[string]flow.FlowFunc),
@@ -347,7 +347,7 @@ func (s *Shell) greeting() {
 }
 
 func (s *Shell) exit() <-chan struct{} {
-	s.cancel <- struct{}{}
+	close(s.cancel)
 	return s.quit
 }
 
@@ -360,7 +360,7 @@ func (s *Shell) running() {
 			close(s.quit)
 			return
 		case <-s.OsInterrupt:
-			s.cancel <- struct{}{}
+			<-s.exit()
 			return
 		case command := <-s.UserInput:
 			s.capture(&command)
