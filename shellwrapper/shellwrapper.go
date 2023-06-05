@@ -164,7 +164,7 @@ func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 func (s *Shell) GoTo(name string, instruction string) *Shell {
 	branch, ok := s.branches[name]
 	if !ok {
-		panic(fmt.Sprintf("branch %s not found", name))
+		return s.ThenQuit(fmt.Sprintf("branch '%s' not found", name))
 	}
 	s.ThenBranch(instruction, branch)
 	return s

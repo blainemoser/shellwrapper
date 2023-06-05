@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,7 +46,121 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestFlowConditions(t *testing.T) {
+func TestBadCommand(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "bad_command\n")
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"unrecognised command 'bad_command'"}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestQuit(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "exit\n")
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"exiting..."}, false); err != nil {
+		t.Error(err)
+	}
+	sh = NewShell()
+	sh.FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you")
+	go sh.Start()
+	bufferOutput()
+	sh.Quit()
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"exiting..."}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestBranching(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.FirstInstruction("run programme?").SetBufferSize(1000).IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you").
+		IfUserInputs("no", "n", "NO", "N").ThenBranch("would you like to do anything else?", func() {
+		sh.IfUserInputs("yes").ThenQuit("that's all we can do though.").Default("yes").
+			IfUserInputs("no").ThenQuit("OK")
+	})
+	go sh.Start()
+	bufferOutput()
+	write(sh, "n\n")
+	write(sh, "yes\n")
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"that's all we can do though.", "exiting..."}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestGotos(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.FirstInstruction("run programme?").Branch("branch_one", func() {
+		sh.IfUserInputs("hello world!").ThenQuit("hello")
+	}).Branch("branch_two", func() {
+		sh.IfUserInputs("goodbye").ThenQuit("goodbye")
+	}).IfUserInputs("one").Default("one").GoTo("branch_one", "you've entered branch one").
+		IfUserInputs("branch_two").GoTo("branch_two", "you've entered branch two")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "one\n")
+	write(sh, "hello world!\n")
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"you've entered branch one", "hello"}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestNoBranch(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.FirstInstruction("run programme?").IfUserInputs("one").Default("one").GoTo("branch_one", "you've entered branch one").
+		IfUserInputs("branch_two").GoTo("branch_two", "you've entered branch two")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "one\n")
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"branch 'branch_one' not found"}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestFunc(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	var message string
+	sh.SetGreeting("welcome to the test shell").
+		SetBufferSize(10000).
+		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
+		for {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("timeout (not expected)")
+			default:
+				message = "ran function"
+				return nil
+			}
+		}
+	}).WithTimeout(2500).WithLoadingMessage("function loading").ThenQuit("thank you")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "\n")
+	getOutput()
+	if message != "ran function" {
+		t.Errorf("expected message from function to be 'ran function', got '%s'", message)
+	}
+}
+
+// One might see some weird terminal artifacts with this function
+// This is when the goroutine for the function is run
+func TestFuncTimeout(t *testing.T) {
 	Testing = true
 	sh := NewShell()
 	var message string
@@ -56,29 +171,23 @@ func TestFlowConditions(t *testing.T) {
 			case <-ctx.Done():
 				return fmt.Errorf("timeout (expected)")
 			default:
-				// sh.Quit()
+				message = "ran function"
 				return nil
 			}
 		}
-		// sh.Display(message, false)
-		// message = "hello from shell test"
-		// return nil
 	}).WithTimeout(10).ThenQuit("thank you")
 	go sh.Start()
 	bufferOutput()
-	// copy the output in a separate goroutine so printing can't block indefinitely
-	time.Sleep(time.Second * 2)
-	// sh.UserInput <- string([]byte{27, 91, 65})
-	sh.StdIn.(*bytes.Buffer).WriteString(string([]byte{27, 91, 65}) + "\n") // test special
-	sh.waitForInput()
-	time.Sleep(time.Second * 1)
-	sh.StdIn.(*bytes.Buffer).WriteString("yes\n") // test special
-	sh.waitForInput()
-	time.Sleep(time.Second * 4)
-	// fmt.Fprintln(sh.StdIn, "worse_commdng")
-	fmt.Print(getOutput() + "ere")
-	fmt.Println(message)
-	fmt.Println(sh.flow.Executed)
+	write(sh, string([]byte{27, 91, 65})+"\n")
+	write(sh, "\n")
+	time.Sleep(time.Second * 2) // should have timed out after three seconds
+	getOutput()
+	if len(message) > 0 {
+		t.Errorf("expected message from function to be blank (expected timeout), got '%s'", message)
+	}
+	if err := checkShellBuffer(sh, []string{"timeout (expected)"}, false); err != nil {
+		t.Error(err)
+	}
 }
 
 func bufferOutput() {
@@ -96,4 +205,37 @@ func getOutput() string {
 	w.Close()
 	os.Stdout = old
 	return <-outC
+}
+
+func checkShellBuffer(sh *Shell, messages []string, notIn bool) error {
+	expects := make(map[string]struct{})
+	for _, message := range messages {
+		expects[message] = struct{}{}
+	}
+	for e := sh.Buffer.Front(); e != nil; e = e.Next() {
+		v := e.Value
+		bufferObject, ok := v.(*BufferObject)
+		if !ok {
+			continue
+		}
+		for message := range expects {
+			if strings.Contains(bufferObject.Out, message) {
+				delete(expects, message)
+			}
+		}
+	}
+	errs := make([]string, 0)
+	if len(expects) > 0 {
+		for message := range expects {
+			errs = append(errs, message)
+		}
+		return fmt.Errorf("expected the following messages to be in the shell buffer (not found): '%s'", strings.Join(errs, "', '"))
+	}
+	return nil
+}
+
+func write(sh *Shell, input string) {
+	sh.StdIn.(*bytes.Buffer).WriteString(input)
+	sh.waitForInput()
+	time.Sleep(time.Second * 1)
 }
