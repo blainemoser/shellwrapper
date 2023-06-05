@@ -32,22 +32,25 @@ var (
 
 type (
 	Shell struct {
-		StdIn         io.Writer
-		Reader        *bufio.Reader
-		OsInterrupt   chan os.Signal
-		UserInput     chan string
-		LastCaptured  chan string
-		Buffer        *list.List
-		cancel        chan struct{}
-		quit          chan struct{}
-		bufferSize    int
-		flow          *Flow
-		branches      map[string]FlowFunc
-		writer        *uilive.Writer
-		wait          chan struct{}
-		shellOutChan  chan bool
-		greeter       []string
-		lastSetInputs []string
+		StdIn          io.Writer
+		Reader         *bufio.Reader
+		OsInterrupt    chan os.Signal
+		UserInput      chan string
+		QuestionInput  chan string
+		LastCaptured   chan string
+		Buffer         *list.List
+		cancel         chan struct{}
+		quit           chan struct{}
+		bufferSize     int
+		flow           *Flow
+		branches       map[string]FlowFunc
+		writer         *uilive.Writer
+		wait           chan struct{}
+		awaitingAnswer string
+		shellOutChan   chan bool
+		greeter        []string
+		lastSetInputs  []string
+		qas            map[string]string
 	}
 
 	BufferObject struct {
@@ -88,6 +91,7 @@ func NewShell() *Shell {
 		flow:         NewFlow(), // the root node, if you will
 		writer:       getWriter(),
 		wait:         make(chan struct{}),
+		qas:          make(map[string]string),
 	}
 }
 
@@ -209,8 +213,16 @@ func (s *Shell) WithLoadingMessage(message string) *Shell {
 
 // Display displays a message; if overwrite is false, it is displayed
 // as a new line
-func (s *Shell) Display(message string, overwrite bool) {
+func (s *Shell) Display(message string, overwrite bool) *Shell {
 	s.waitForShellOutput("", message, overwrite, false)
+	return s
+}
+
+func (s *Shell) Ask(question, storeAs string) *Shell {
+	s.flow.QAs[storeAs] = &QA{
+		Question: question,
+	}
+	return s
 }
 
 // Start starts the shell programme
@@ -224,6 +236,10 @@ func (s *Shell) Start() {
 // Quit quits the shell programme
 func (s *Shell) Quit() {
 	<-s.exit()
+}
+
+func (s *Shell) GetValue(storedAs string) string {
+	return s.qas[storedAs]
 }
 
 func (s *Shell) insertFlow() *Flow {
@@ -301,7 +317,6 @@ func (j *jitter) displayError(s *Shell) {
 }
 
 func (j *jitter) displayDone(s *Shell) {
-	// s.Display("done, yo", false)
 	s.Display(fmt.Sprintf("> %s %s", j.message, " ...done"), true)
 }
 
@@ -350,7 +365,14 @@ func (s *Shell) exit() <-chan struct{} {
 
 func (s *Shell) running() {
 	s.greeting()
+	if len(s.flow.QAs) > 0 {
+		s.runQuestions()
+	}
 	go s.waitForInput()
+	s.loop()
+}
+
+func (s *Shell) loop() {
 	for {
 		select {
 		case <-s.cancel:
@@ -363,6 +385,9 @@ func (s *Shell) running() {
 			s.capture(&command)
 			if s.handleCommand(command) {
 				return
+			}
+			if len(s.flow.QAs) > 0 {
+				s.runQuestions()
 			}
 			go s.waitForInput()
 		}
@@ -394,13 +419,13 @@ func (s *Shell) flowCommand(command string) *bool {
 	return &result
 }
 
+func (s *Shell) handleAnswer(command string) bool {
+	s.qas[s.awaitingAnswer] = command
+	return true
+}
+
 func (s *Shell) runFlowFunc() {
-	if s.flow.Exec != nil && !s.flow.Executed {
-		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Exec); err != nil {
-			s.bufferError(err)
-		}
-		s.flow.Executed = true
-	}
+	s.runExec()
 	if s.flow.Quit != nil {
 		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Quit); err != nil {
 			s.bufferError(err)
@@ -408,6 +433,26 @@ func (s *Shell) runFlowFunc() {
 	}
 	if s.flow.Flow != nil {
 		s.flow.Flow()
+	}
+}
+
+func (s *Shell) runQuestions() {
+	defer func() { s.awaitingAnswer = "" }()
+	for storeAs, qa := range s.flow.QAs {
+		s.awaitingAnswer = storeAs
+		s.Display("> "+qa.Question, false)
+		go s.waitForInput()
+		s.handleAnswer(<-s.UserInput)
+		delete(s.flow.QAs, storeAs)
+	}
+}
+
+func (s *Shell) runExec() {
+	if s.flow.Exec != nil && !s.flow.Executed {
+		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Exec); err != nil {
+			s.bufferError(err)
+		}
+		s.flow.Executed = true
 	}
 }
 
@@ -472,9 +517,10 @@ func (s *Shell) bufferError(err error) {
 }
 
 func (s *Shell) waitForInput() {
-	s.instruct()
+	if len(s.awaitingAnswer) < 1 {
+		s.instruct()
+	}
 	userInput, err := s.Reader.ReadString('\n')
-	// fmt.Println(s.stdin.(*bytes.buffer).len(), "here")
 	if err != nil && userInput == "\n" {
 		err = errors.New("carriage_return")
 	}
