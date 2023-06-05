@@ -6,6 +6,7 @@ type (
 	Flow struct {
 		Flows          Flows
 		Exec           ExecFunc
+		Quit           ExecFunc
 		Flow           FlowFunc
 		Commands       []string
 		Instruction    string
