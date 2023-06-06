@@ -62,19 +62,14 @@ func TestBadCommand(t *testing.T) {
 func TestQuit(t *testing.T) {
 	Testing = true
 	sh := NewShell()
-	sh.FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you")
+	sh.
+		FirstInstruction("run programme?").
+		IfUserInputs("yes", "y", "Yes", "YES", "Y").
+		Default("yes").
+		ThenQuit("thank you")
 	go sh.Start()
 	bufferOutput()
 	write(sh, "exit\n")
-	getOutput()
-	if err := checkShellBuffer(sh, []string{"exiting..."}, false); err != nil {
-		t.Error(err)
-	}
-	sh = NewShell()
-	sh.FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you")
-	go sh.Start()
-	bufferOutput()
-	sh.Quit()
 	getOutput()
 	if err := checkShellBuffer(sh, []string{"exiting..."}, false); err != nil {
 		t.Error(err)
@@ -84,11 +79,20 @@ func TestQuit(t *testing.T) {
 func TestBranching(t *testing.T) {
 	Testing = true
 	sh := NewShell()
-	sh.FirstInstruction("run programme?").SetBufferSize(1000).IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenQuit("thank you").
-		IfUserInputs("no", "n", "NO", "N").ThenBranch("would you like to do anything else?", func() {
-		sh.IfUserInputs("yes").ThenQuit("that's all we can do though.").Default("yes").
-			IfUserInputs("no").ThenQuit("OK")
-	})
+	sh.
+		FirstInstruction("run programme?").
+		SetBufferSize(1000).
+		IfUserInputs("yes", "y", "Yes", "YES", "Y").
+		Default("yes").
+		ThenQuit("thank you").
+		IfUserInputs("no", "n", "NO", "N").
+		ThenBranch("would you like to do anything else?", func() {
+			sh.
+				IfUserInputs("yes").
+				ThenQuit("that's all we can do though.").
+				Default("yes").
+				IfUserInputs("no").ThenQuit("OK")
+		})
 	go sh.Start()
 	bufferOutput()
 	write(sh, "n\n")
@@ -148,7 +152,7 @@ func TestFunc(t *testing.T) {
 				return nil
 			}
 		}
-	}).WithTimeout(2500).WithLoadingMessage("function loading").ThenQuit("thank you")
+	}, "function loading", 10000).ThenQuit("thank you")
 	go sh.Start()
 	bufferOutput()
 	write(sh, "\n")
@@ -164,22 +168,23 @@ func TestFuncTimeout(t *testing.T) {
 	Testing = true
 	sh := NewShell()
 	var message string
-	sh.SetGreeting("welcome to the test shell").FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
-		time.Sleep(time.Second * 2)
-		for {
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("timeout (expected)")
-			default:
-				message = "ran function"
-				return nil
+	sh.SetGreeting("welcome to the test shell").
+		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").
+		ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
+			time.Sleep(time.Second * 2)
+			for {
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("timeout (expected)")
+				default:
+					message = "ran function"
+					return nil
+				}
 			}
-		}
-	}).WithTimeout(10).ThenQuit("thank you")
+		}, "running...", 100).ThenQuit("thank you")
 	go sh.Start()
 	bufferOutput()
 	write(sh, string([]byte{27, 91, 65})+"\n")
-	write(sh, "\n")
 	time.Sleep(time.Second * 2) // should have timed out after three seconds
 	getOutput()
 	if len(message) > 0 {

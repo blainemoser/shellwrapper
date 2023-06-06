@@ -28,6 +28,7 @@ var (
 	Testing          = false
 	disp             = []string{"/", "-", "\\", "|"}
 	errorUUID string = uuid.NewString()
+	exitUUID  string = uuid.NewString()
 )
 
 type (
@@ -38,9 +39,11 @@ type (
 		UserInput      chan string
 		QuestionInput  chan string
 		LastCaptured   chan string
+		command        string
 		Buffer         *list.List
 		cancel         chan struct{}
 		quit           chan struct{}
+		exited         bool
 		bufferSize     int
 		flow           *Flow
 		branches       map[string]FlowFunc
@@ -113,10 +116,66 @@ func (s *Shell) SetBufferSize(bufferSize int) *Shell {
 // a user's input. input here is variadic so that you can
 // set alternatives, for example yes, YES, y and Y
 func (s *Shell) IfUserInputs(input ...string) *Shell {
+	if s.flow == nil {
+		s.flow = NewFlow()
+	}
 	s.lastSetInputs = input
-	s.flow.Commands = append(s.flow.Commands, input[0])
-	s.insertFlow()
+	if !s.addCommand(input...) {
+		return s
+	}
+	s.flow.AddEvent(func(e *list.Element) *list.Element {
+		if err := s.awaitAnyInput(s.handleCommand, ""); err != nil {
+			<-s.exit()
+		}
+		s.runEvents()
+		return e.Next()
+	})
 	return s
+}
+
+func (s *Shell) awaitAnyInput(f func(string) bool, message string) error {
+	ok := false
+	for !ok {
+		go s.waitForInput()
+		if len(message) > 0 {
+			s.waitForShellOutput("", message, false, false)
+		}
+		select {
+		case <-s.OsInterrupt:
+			return errors.New("interrupt")
+		case input := <-s.UserInput:
+			ok = f(input)
+		}
+	}
+	return nil
+}
+
+func (s *Shell) addCommand(input ...string) bool {
+	flow := NewFlow()
+	var commandAdded bool
+	for _, command := range input {
+		if s.reservedWord(command) {
+			continue
+		}
+		if !commandAdded {
+			s.flow.BaseCommands = append(s.flow.BaseCommands, command)
+			s.command = command
+			commandAdded = true
+		}
+		s.setFlow(flow, command)
+	}
+	return commandAdded
+}
+
+func (s *Shell) nextEvent(e *list.Element) *list.Element {
+	next := e.Next()
+	if next == nil {
+		return nil
+	}
+	if _, ok := next.Value.(EventFunc); ok {
+		return next
+	}
+	return nil
 }
 
 // Default Sets a default command to be run for when the user
@@ -129,29 +188,28 @@ func (s *Shell) Default(def string) *Shell {
 // FirstInstruction Sets the first instruction that will appear in the shell
 // For example 'what is your name?'
 func (s *Shell) FirstInstruction(instruction string) *Shell {
-	s.flow.Instruction = instruction
+	s.getFlow().Instruction = instruction
 	return s
 }
 
 // ThenRun runs the passed function f after a condition has been met
-func (s *Shell) ThenRun(f ExecFunc) *Shell {
-	flow := s.findLastFlow()
-	if flow == nil {
-		return s
-	}
-	flow.Exec = f
+func (s *Shell) ThenRun(f ExecFunc, loadingMessage string, timeout uint) *Shell {
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		s.runExec(f, loadingMessage, timeout)
+		return s.nextEvent(e)
+	})
 	return s
 }
 
 // ThenBranch runs the callback function f after a condition has been met.
 // The function f should contain further branching rules
 func (s *Shell) ThenBranch(instruction string, f FlowFunc) *Shell {
-	flow := s.findLastFlow()
-	if flow == nil {
-		return s
-	}
-	flow.Instruction = instruction
-	flow.Flow = f
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		s.command = ""
+		s.getFlow().Instruction = instruction
+		f()
+		return s.nextEvent(e)
+	})
 	return s
 }
 
@@ -168,46 +226,25 @@ func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 func (s *Shell) GoTo(name string, instruction string) *Shell {
 	branch, ok := s.branches[name]
 	if !ok {
-		return s.ThenQuit(fmt.Sprintf("branch '%s' not found", name))
+		s.ThenQuit(fmt.Sprintf("branch '%s' not found", name))
 	}
-	s.ThenBranch(instruction, branch)
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		s.command = ""
+		s.getFlow().Instruction = instruction
+		branch()
+		return s.nextEvent(e)
+	})
 	return s
 }
 
 // ThenQuit quits the programme after some condition has been met
 func (s *Shell) ThenQuit(message string) *Shell {
-	flow := s.findLastFlow()
-	if flow == nil {
-		return s
-	}
-	flow.Quit = func(ctx context.Context, cancel context.CancelFunc) error {
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
 		s.Display("> "+message, false)
+		s.exited = true
 		<-s.exit()
 		return nil
-	}
-	return s
-}
-
-// WithTimeout specifies the maximum execution time of a function
-// passed into ThenRun. If this is exceeded, a timeout error will be
-// generated
-func (s *Shell) WithTimeout(timeout uint) *Shell {
-	flow := s.findLastFlow()
-	if flow == nil {
-		return s
-	}
-	flow.WaitTime = int(timeout)
-	return s
-}
-
-// WithLoadingMessage specifies the message that will be displayed
-// while a function passed into ThenRun is executing
-func (s *Shell) WithLoadingMessage(message string) *Shell {
-	flow := s.findLastFlow()
-	if flow == nil {
-		return s
-	}
-	flow.LoadingMessage = message
+	})
 	return s
 }
 
@@ -219,9 +256,14 @@ func (s *Shell) Display(message string, overwrite bool) *Shell {
 }
 
 func (s *Shell) Ask(question, storeAs string) *Shell {
-	s.flow.QAs[storeAs] = &QA{
-		Question: question,
-	}
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		defer func() { s.awaitingAnswer = "" }()
+		s.awaitingAnswer = storeAs
+		if err := s.awaitAnyInput(s.handleAnswer, "> "+question); err != nil {
+			<-s.exit()
+		}
+		return s.nextEvent(e)
+	})
 	return s
 }
 
@@ -233,49 +275,30 @@ func (s *Shell) Start() {
 	s.writer.Stop()
 }
 
-// Quit quits the shell programme
-func (s *Shell) Quit() {
-	<-s.exit()
-}
-
 func (s *Shell) GetValue(storedAs string) string {
 	return s.qas[storedAs]
 }
 
-func (s *Shell) insertFlow() *Flow {
-	flow := NewFlow()
-	for _, input := range s.lastSetInputs {
-		if s.reservedWord(input) {
-			continue
-		}
-		s.flow.Flows[input] = flow
+func (s *Shell) getFlow() *Flow {
+	if s.flow == nil {
+		s.flow = NewFlow()
+		return s.flow
 	}
-	return flow
+	if len(s.command) < 1 {
+		return s.flow
+	}
+	return s.flow.Flows[s.command]
+}
+
+func (s *Shell) setFlow(flow *Flow, command string) {
+	if s.flow == nil {
+		s.flow = NewFlow()
+	}
+	s.flow.Flows[command] = flow
 }
 
 func (s *Shell) reservedWord(input string) bool {
 	return input == EXIT || input == QUIT || input == BACK
-}
-
-func (s *Shell) findLastFlow() *Flow {
-	for _, input := range s.lastSetInputs {
-		if s.reservedWord(input) {
-			continue
-		}
-		flow, ok := s.flow.Flows[input]
-		if ok {
-			return flow
-		}
-	}
-	return nil
-}
-
-func (s *Shell) findFlow(command string) *Flow {
-	flow, ok := s.flow.Flows[command]
-	if !ok {
-		return nil
-	}
-	return flow
 }
 
 func (s *Shell) newJitter(waitFor int, message string) *jitter {
@@ -365,11 +388,23 @@ func (s *Shell) exit() <-chan struct{} {
 
 func (s *Shell) running() {
 	s.greeting()
-	if len(s.flow.QAs) > 0 {
-		s.runQuestions()
-	}
-	go s.waitForInput()
+	s.runEvents()
 	s.loop()
+}
+
+func (s *Shell) runEvents() {
+	e := s.flow.Events.Front()
+	for {
+		if e == nil {
+			return
+		}
+		v := e.Value
+		if event, ok := v.(EventFunc); ok {
+			e = event(e)
+		} else {
+			e = nil // propagation ended
+		}
+	}
 }
 
 func (s *Shell) loop() {
@@ -381,15 +416,6 @@ func (s *Shell) loop() {
 		case <-s.OsInterrupt:
 			<-s.exit()
 			return
-		case command := <-s.UserInput:
-			s.capture(&command)
-			if s.handleCommand(command) {
-				return
-			}
-			if len(s.flow.QAs) > 0 {
-				s.runQuestions()
-			}
-			go s.waitForInput()
 		}
 	}
 }
@@ -401,58 +427,41 @@ func (s *Shell) handleCommand(command string) bool {
 	case QUIT, EXIT:
 		<-s.exit()
 		return false
+	case exitUUID:
+		return true
 	}
 	if result := s.flowCommand(command); result != nil {
 		return *result
 	}
-	return s.badCommand(command)
+	s.badCommand(command)
+	return true
 }
 
 func (s *Shell) flowCommand(command string) *bool {
-	flow := s.findFlow(command)
-	if flow == nil {
+	var result bool
+	flow, ok := s.flow.Flows[command]
+	if !ok {
 		return nil
 	}
-	result := false
 	s.flow = flow
-	s.runFlowFunc()
+	result = true
 	return &result
 }
 
 func (s *Shell) handleAnswer(command string) bool {
+	if command == exitUUID {
+		return true
+	}
+	if len(command) < 1 {
+		return false
+	}
 	s.qas[s.awaitingAnswer] = command
 	return true
 }
 
-func (s *Shell) runFlowFunc() {
-	s.runExec()
-	if s.flow.Quit != nil {
-		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Quit); err != nil {
-			s.bufferError(err)
-		}
-	}
-	if s.flow.Flow != nil {
-		s.flow.Flow()
-	}
-}
-
-func (s *Shell) runQuestions() {
-	defer func() { s.awaitingAnswer = "" }()
-	for storeAs, qa := range s.flow.QAs {
-		s.awaitingAnswer = storeAs
-		s.Display("> "+qa.Question, false)
-		go s.waitForInput()
-		s.handleAnswer(<-s.UserInput)
-		delete(s.flow.QAs, storeAs)
-	}
-}
-
-func (s *Shell) runExec() {
-	if s.flow.Exec != nil && !s.flow.Executed {
-		if err := s.runFunc(s.flow.WaitTime, s.flow.LoadingMessage, s.flow.Exec); err != nil {
-			s.bufferError(err)
-		}
-		s.flow.Executed = true
+func (s *Shell) runExec(f ExecFunc, loadingMessage string, timeout uint) {
+	if err := s.runFunc(int(timeout), loadingMessage, f); err != nil {
+		s.bufferError(err)
 	}
 }
 
@@ -470,7 +479,6 @@ func (s *Shell) badCommand(command string) bool {
 }
 
 func (s *Shell) capture(command *string) {
-	s.sanitize(command)
 	if len(s.LastCaptured) > 0 {
 		// Drain channel
 		<-s.LastCaptured
@@ -509,7 +517,7 @@ func (s *Shell) bufferError(err error) {
 	case "EOF":
 		return
 	case "carriage_return":
-		s.UserInput <- errorUUID
+		s.UserInput <- ""
 		return
 	default:
 		s.waitForShellOutput(errorUUID, fmt.Sprintf("> An error occured (%s), please try again", err.Error()), false, true)
@@ -517,9 +525,7 @@ func (s *Shell) bufferError(err error) {
 }
 
 func (s *Shell) waitForInput() {
-	if len(s.awaitingAnswer) < 1 {
-		s.instruct()
-	}
+	s.instruct()
 	userInput, err := s.Reader.ReadString('\n')
 	if err != nil && userInput == "\n" {
 		err = errors.New("carriage_return")
@@ -528,32 +534,33 @@ func (s *Shell) waitForInput() {
 		s.bufferError(err)
 		return
 	}
+	s.sanitize(&userInput)
+	s.capture(&userInput)
 	s.special(&userInput)
-	if userInput == "" {
-		s.UserInput <- errorUUID
-		return
-	}
 	s.emptyUserInput(&userInput)
 	s.UserInput <- userInput
 }
 
 func (s *Shell) emptyUserInput(userInput *string) {
 	*userInput = strings.TrimSuffix(*userInput, "\n")
-	if len(*userInput) < 1 && len(s.flow.Default) > 0 {
+	if len(s.awaitingAnswer) < 1 && len(*userInput) < 1 && len(s.flow.Default) > 0 {
 		*userInput = s.flow.Default
 		s.waitForShellOutput(*userInput, *userInput, false, false)
 	}
 }
 
 func (s *Shell) emptyFlow() bool {
-	return len(s.flow.Commands) < 1
+	return len(s.flow.Flows) < 1
 }
 
 func (s *Shell) instruct() {
 	if s.emptyFlow() {
 		return
 	}
-	instruction := fmt.Sprintf("> %s [options: %s]", s.flow.Instruction, strings.Join(s.flow.Commands, ", "))
+	if len(s.awaitingAnswer) > 0 {
+		return
+	}
+	instruction := fmt.Sprintf("> %s [options: %s]", s.flow.Instruction, strings.Join(s.flow.BaseCommands, ", "))
 	if len(s.flow.Default) > 0 {
 		instruction = fmt.Sprintf("%s (default '%s')", instruction, s.flow.Default)
 	}
@@ -593,6 +600,7 @@ func getWriter() *uilive.Writer {
 
 func (s *Shell) special(userInput *string) {
 	bytes := []byte(*userInput)
+	fmt.Println(bytes)
 	if len(bytes) >= 3 {
 		if bytes[0] == 27 && bytes[1] == 91 {
 			if bytes[2] == 65 {
