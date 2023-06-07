@@ -195,6 +195,48 @@ func TestFuncTimeout(t *testing.T) {
 	}
 }
 
+func TestAsk(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	var message string
+	sh.SetGreeting("welcome to the test shell").
+		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").
+		Ask("Are you animal, mineral or vegetable?", "animal_mineral_vegetable").
+		Default("yes").
+		ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
+			message = fmt.Sprintf("you answered: %s", sh.GetValue("animal_mineral_vegetable"))
+			return nil
+		}, "running...", 100) // should quit when the propagation stops
+	go sh.Start()
+	bufferOutput()
+	// Spam with some empty answers
+	write(sh, string("\n"))
+	write(sh, string("\n"))
+	write(sh, string("\n"))
+	write(sh, string("\n"))
+	write(sh, string("\n"))
+	write(sh, string("\n"))
+	write(sh, string("robot\n"))
+	time.Sleep(time.Second * 2) // should have timed out after three seconds
+	getOutput()
+	if len(message) < 1 || message != "you answered: robot" {
+		t.Errorf("expected message from function to be 'you answered: robot', got '%s'", message)
+	}
+}
+
+func TestInterrupt(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.SetGreeting("welcome to the test shell").
+		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").
+		Default("yes").ThenQuit("done with programme")
+	go sh.Start()
+	bufferOutput()
+	time.Sleep(time.Second * 2) // should have timed out after three seconds
+	sh.OsInterrupt <- os.Interrupt
+	getOutput()
+}
+
 func bufferOutput() {
 	r, w, _ = os.Pipe()
 	os.Stdout = w

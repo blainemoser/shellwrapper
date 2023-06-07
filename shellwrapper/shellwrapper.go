@@ -389,13 +389,13 @@ func (s *Shell) exit() <-chan struct{} {
 func (s *Shell) running() {
 	s.greeting()
 	s.runEvents()
-	s.loop()
 }
 
 func (s *Shell) runEvents() {
 	e := s.flow.Events.Front()
 	for {
 		if e == nil {
+			<-s.exit()
 			return
 		}
 		v := e.Value
@@ -403,19 +403,6 @@ func (s *Shell) runEvents() {
 			e = event(e)
 		} else {
 			e = nil // propagation ended
-		}
-	}
-}
-
-func (s *Shell) loop() {
-	for {
-		select {
-		case <-s.cancel:
-			close(s.quit)
-			return
-		case <-s.OsInterrupt:
-			<-s.exit()
-			return
 		}
 	}
 }

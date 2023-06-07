@@ -3,28 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/blainemoser/shellwrapper/shellwrapper"
 )
 
 func main() {
-	sh := shellwrapper.NewShell()
 	var message string
+	sh := shellwrapper.NewShell()
 	sh.SetGreeting("welcome to the test shell").
-		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").Default("yes").
+		FirstInstruction("run programme?").IfUserInputs("yes", "y", "Yes", "YES", "Y").
+		Ask("Are you animal, mineral or vegetable?", "animal_mineral_vegetable").
+		Default("yes").
 		ThenRun(func(ctx context.Context, cf context.CancelFunc) error {
-			time.Sleep(time.Second * 2)
-			for {
-				select {
-				case <-ctx.Done():
-					return fmt.Errorf("timeout (expected)")
-				default:
-					message = "ran function"
-					return nil
-				}
-			}
-		}, "running...", 100).ThenQuit("thank you")
+			message = fmt.Sprintf("you answered: %s", sh.GetValue("animal_mineral_vegetable"))
+			return nil
+		}, "running...", 100)
 	sh.Start()
 	fmt.Println(message)
 	// sh := shellwrapper.NewShell()
