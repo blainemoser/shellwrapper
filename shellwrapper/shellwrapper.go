@@ -161,11 +161,7 @@ func (s *Shell) addCommand(input ...string) bool {
 	flow := NewFlow()
 	var commandAdded bool
 	for _, command := range input {
-		if s.reservedWord(command) {
-			panic(fmt.Sprintf("%s is a reserved word; please use inputs other than: %s", command, strings.Join([]string{
-				EXIT, BACK, QUIT,
-			}, ", ")))
-		}
+		s.reservedWord(command)
 		if !commandAdded {
 			s.flow.BaseCommands = append(s.flow.BaseCommands, command)
 			s.command = command
@@ -275,39 +271,15 @@ func (s *Shell) Display(message string, overwrite bool) *Shell {
 }
 
 func (s *Shell) Ask(question, storeAs string) *Shell {
-	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
-		defer func() { s.awaitingAnswer = "" }()
-		s.awaitingAnswer = storeAs
-		if err := s.awaitAnyInput(s.handleAnswer, "> "+question); err != nil {
-			<-s.exit()
-		}
-		return s.nextEvent(e)
-	})
-	return s
+	return s.ask(question, storeAs, s.handleAnswer)
 }
 
 func (s *Shell) AskForInt(question, storeAs string) *Shell {
-	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
-		defer func() { s.awaitingAnswer = "" }()
-		s.awaitingAnswer = storeAs
-		if err := s.awaitAnyInput(s.handleIntAnswer, "> "+question); err != nil {
-			<-s.exit()
-		}
-		return s.nextEvent(e)
-	})
-	return s
+	return s.ask(question, storeAs, s.handleIntAnswer)
 }
 
 func (s *Shell) AskForFloat(question, storeAs string) *Shell {
-	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
-		defer func() { s.awaitingAnswer = "" }()
-		s.awaitingAnswer = storeAs
-		if err := s.awaitAnyInput(s.handleFloatAnswer, "> "+question); err != nil {
-			<-s.exit()
-		}
-		return s.nextEvent(e)
-	})
-	return s
+	return s.ask(question, storeAs, s.handleFloatAnswer)
 }
 
 // Start starts the shell programme
@@ -350,8 +322,24 @@ func (s *Shell) setFlow(flow *Flow, command string) {
 	s.flow.Flows[command] = flow
 }
 
-func (s *Shell) reservedWord(input string) bool {
-	return input == EXIT || input == QUIT || input == BACK
+func (s *Shell) reservedWord(input string) {
+	if input == EXIT || input == QUIT || input == BACK {
+		panic(fmt.Sprintf("%s is a reserved word; please use inputs other than: %s", input, strings.Join([]string{
+			EXIT, BACK, QUIT,
+		}, ", ")))
+	}
+}
+
+func (s *Shell) ask(question, storeAs string, handler func(string) bool) *Shell {
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		defer func() { s.awaitingAnswer = "" }()
+		s.awaitingAnswer = storeAs
+		if err := s.awaitAnyInput(handler, "> "+question); err != nil {
+			<-s.exit()
+		}
+		return s.nextEvent(e)
+	})
+	return s
 }
 
 func (s *Shell) newJitter(waitFor int, message string) *jitter {
@@ -470,22 +458,20 @@ func (s *Shell) handleCommand(command string) bool {
 	case exitUUID:
 		return true
 	}
-	if result := s.flowCommand(command); result != nil {
-		return *result
+	if result := s.flowCommand(command); !result {
+		s.badCommand(command)
+		return false
 	}
-	s.badCommand(command)
 	return true
 }
 
-func (s *Shell) flowCommand(command string) *bool {
-	var result bool
+func (s *Shell) flowCommand(command string) bool {
 	flow, ok := s.flow.Flows[command]
 	if !ok {
-		return nil
+		return false
 	}
 	s.flow = flow
-	result = true
-	return &result
+	return true
 }
 
 func (s *Shell) handleAnswer(command string) bool {
