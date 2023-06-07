@@ -217,10 +217,63 @@ func TestAsk(t *testing.T) {
 	write(sh, string("\n"))
 	write(sh, string("\n"))
 	write(sh, string("robot\n"))
-	time.Sleep(time.Second * 2) // should have timed out after three seconds
 	getOutput()
 	if len(message) < 1 || message != "you answered: robot" {
 		t.Errorf("expected message from function to be 'you answered: robot', got '%s'", message)
+	}
+}
+
+func TestAskInt(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.SetGreeting("welcome to the test shell").SetBufferSize(100).AskForInt("how many apples do you want?", "apples")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "I don't want any apples\n")
+	write(sh, "17\n")
+	getOutput()
+
+	apples, _ := sh.GetIntValue("apples")
+	if apples != 17 {
+		t.Errorf("expected user input to be 17, got %d", apples)
+	}
+
+	if err := checkShellBuffer(sh, []string{"Please enter an integer e.g. 34"}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestAskFloat(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.SetGreeting("welcome to the test shell").SetBufferSize(100).AskForFloat("how tall are you (cm)?", "height")
+	go sh.Start()
+	bufferOutput()
+	write(sh, "I don't know\n")
+	write(sh, "180.2\n")
+	getOutput()
+	height, _ := sh.GetFloatValue("height")
+	if height != 180.2 {
+		t.Errorf("expected user input to be 180.2, got %f", height)
+	}
+
+	if err := checkShellBuffer(sh, []string{"Please enter a number e.g. 3.1415"}, false); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestThenDisplay(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.SetGreeting("welcome to the test shell").SetBufferSize(100).ThenDisplay(func() string {
+		return "> guess this programme was pretty pointless huh?"
+	})
+	go sh.Start()
+	bufferOutput()
+	time.Sleep(time.Second * 1)
+	getOutput()
+	if err := checkShellBuffer(sh, []string{"guess this programme was pretty pointless huh?"}, false); err != nil {
+		t.Error(err)
 	}
 }
 

@@ -66,6 +66,8 @@ type (
 		hidden bool
 	}
 
+	DisplayFunc func() string
+
 	jitter struct {
 		waitFor     int
 		message     string
@@ -227,13 +229,9 @@ func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 
 // ThenDisplay schedules a display event
 // you can use the same inputs as you would pass to fmt.Sprintf
-func (s *Shell) ThenDisplay(display string, add ...any) *Shell {
-	message := display
-	if len(add) > 0 {
-		message = fmt.Sprintf(message, add...)
-	}
+func (s *Shell) ThenDisplay(display DisplayFunc) *Shell {
 	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
-		s.waitForShellOutput("display_event", message, false, false)
+		s.waitForShellOutput("display_event", display(), false, false)
 		return s.nextEvent(e)
 	})
 	return s
