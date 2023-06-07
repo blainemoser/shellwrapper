@@ -219,24 +219,23 @@ func (s *Shell) ThenBranch(instruction string, f FlowFunc) *Shell {
 }
 
 // Branch lets the programmer create a branch in memory that can
-// be visited at a later stage using GoTo
+// be visited at a later stage using the function GoTo
 func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 	s.branches[name] = f
 	return s
 }
 
 // ThenDisplay schedules a display event
-// you can use the same inputs as you would pass to fmt.Sprintf
 func (s *Shell) ThenDisplay(display DisplayFunc) *Shell {
 	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
-		s.waitForShellOutput("display_event", display(), false, false)
+		s.waitForShellOutput("display_event", "> "+display(), false, false)
 		return s.nextEvent(e)
 	})
 	return s
 }
 
 // GoTo lets the programmer specify a "go to" on saved Branches,
-// so that the Branch's branching rules will be applied
+// so that branching rules can be applied in multiple contexts
 // after a condition has been met
 func (s *Shell) GoTo(name string, instruction string) *Shell {
 	branch, ok := s.branches[name]
@@ -270,14 +269,19 @@ func (s *Shell) Display(message string, overwrite bool) *Shell {
 	return s
 }
 
+// Ask promps the user for any string
 func (s *Shell) Ask(question, storeAs string) *Shell {
 	return s.ask(question, storeAs, s.handleAnswer)
 }
 
+// AskForInt promps the user for an integer value
+// If the user's input is unacceptable then they will be prompted again
 func (s *Shell) AskForInt(question, storeAs string) *Shell {
 	return s.ask(question, storeAs, s.handleIntAnswer)
 }
 
+// AskForFloat promps the user for a float value
+// If the user's input is unacceptable then they will be prompted again
 func (s *Shell) AskForFloat(question, storeAs string) *Shell {
 	return s.ask(question, storeAs, s.handleFloatAnswer)
 }
@@ -290,15 +294,21 @@ func (s *Shell) Start() {
 	s.writer.Stop()
 }
 
+// GetValue is used to retrieve strings inputted by the user
+// in the function Ask
 func (s *Shell) GetValue(storedAs string) string {
 	return s.qas[storedAs]
 }
 
+// GetIntValue is used to retrieve integers inputted by the user
+// in the function AskForInt
 func (s *Shell) GetIntValue(storedAs string) (result int, found bool) {
 	result, found = s.intQas[storedAs]
 	return
 }
 
+// GetFloatValue is used to retrieve floats inputted by the user
+// in the function AskForFloat
 func (s *Shell) GetFloatValue(storedAs string) (result float64, found bool) {
 	result, found = s.floatQas[storedAs]
 	return
