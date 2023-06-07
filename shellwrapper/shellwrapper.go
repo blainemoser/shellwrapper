@@ -587,7 +587,6 @@ func getWriter() *uilive.Writer {
 
 func (s *Shell) special(userInput *string) {
 	bytes := []byte(*userInput)
-	fmt.Println(bytes)
 	if len(bytes) >= 3 {
 		if bytes[0] == 27 && bytes[1] == 91 {
 			if bytes[2] == 65 {
