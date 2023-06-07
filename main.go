@@ -4,7 +4,8 @@ import "github.com/blainemoser/shellwrapper/shellwrapper"
 
 func main() {
 	sh := shellwrapper.NewShell()
-	sh.SetGreeting("welcome to the test shell").SetBufferSize(100).AskForFloat("how tall are you (cm)?", "height")
+	sh.SetGreeting("welcome to the test shell").SetBufferSize(100).AskForFloat("how tall are you (cm)?", "height").
+		IfUserInputs("exitty", "e", "ex").ThenQuit("here")
 	sh.Start()
 	// sh := shellwrapper.NewShell()
 	// sh.SetGreeting(

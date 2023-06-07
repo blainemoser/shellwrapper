@@ -277,6 +277,27 @@ func TestThenDisplay(t *testing.T) {
 	}
 }
 
+func TestSmallBuffer(t *testing.T) {
+	Testing = true
+	sh := NewShell()
+	sh.SetGreeting("welcome to the test shell").SetBufferSize(1).ThenDisplay(func() string {
+		return "> This should be the only buffer item, and it will soon be replaced..."
+	}).ThenDisplay(func() string {
+		return "> guess this programme was pretty pointless huh?"
+	})
+	go sh.Start()
+	bufferOutput()
+	time.Sleep(time.Second * 1)
+	getOutput()
+	e := sh.Buffer.Front()
+	if e == nil {
+		t.Fatalf("expected one buffer item, got none")
+	}
+	if e.Next() != nil {
+		t.Errorf("expected only one buffer item")
+	}
+}
+
 func TestInterrupt(t *testing.T) {
 	Testing = true
 	sh := NewShell()

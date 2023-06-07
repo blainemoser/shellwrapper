@@ -162,7 +162,9 @@ func (s *Shell) addCommand(input ...string) bool {
 	var commandAdded bool
 	for _, command := range input {
 		if s.reservedWord(command) {
-			continue
+			panic(fmt.Sprintf("%s is a reserved word; please use inputs other than: %s", command, strings.Join([]string{
+				EXIT, BACK, QUIT,
+			}, ", ")))
 		}
 		if !commandAdded {
 			s.flow.BaseCommands = append(s.flow.BaseCommands, command)
