@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,8 @@ type (
 		greeter        []string
 		lastSetInputs  []string
 		qas            map[string]string
+		intQas         map[string]int
+		floatQas       map[string]float64
 	}
 
 	BufferObject struct {
@@ -95,6 +98,8 @@ func NewShell() *Shell {
 		writer:       getWriter(),
 		wait:         make(chan struct{}),
 		qas:          make(map[string]string),
+		intQas:       make(map[string]int),
+		floatQas:     make(map[string]float64),
 	}
 }
 
@@ -220,6 +225,20 @@ func (s *Shell) Branch(name string, f FlowFunc) *Shell {
 	return s
 }
 
+// ThenDisplay schedules a display event
+// you can use the same inputs as you would pass to fmt.Sprintf
+func (s *Shell) ThenDisplay(display string, add ...any) *Shell {
+	message := display
+	if len(add) > 0 {
+		message = fmt.Sprintf(message, add...)
+	}
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		s.waitForShellOutput("display_event", message, false, false)
+		return s.nextEvent(e)
+	})
+	return s
+}
+
 // GoTo lets the programmer specify a "go to" on saved Branches,
 // so that the Branch's branching rules will be applied
 // after a condition has been met
@@ -267,6 +286,30 @@ func (s *Shell) Ask(question, storeAs string) *Shell {
 	return s
 }
 
+func (s *Shell) AskForInt(question, storeAs string) *Shell {
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		defer func() { s.awaitingAnswer = "" }()
+		s.awaitingAnswer = storeAs
+		if err := s.awaitAnyInput(s.handleIntAnswer, "> "+question); err != nil {
+			<-s.exit()
+		}
+		return s.nextEvent(e)
+	})
+	return s
+}
+
+func (s *Shell) AskForFloat(question, storeAs string) *Shell {
+	s.getFlow().AddEvent(func(e *list.Element) *list.Element {
+		defer func() { s.awaitingAnswer = "" }()
+		s.awaitingAnswer = storeAs
+		if err := s.awaitAnyInput(s.handleFloatAnswer, "> "+question); err != nil {
+			<-s.exit()
+		}
+		return s.nextEvent(e)
+	})
+	return s
+}
+
 // Start starts the shell programme
 func (s *Shell) Start() {
 	go s.running()
@@ -277,6 +320,16 @@ func (s *Shell) Start() {
 
 func (s *Shell) GetValue(storedAs string) string {
 	return s.qas[storedAs]
+}
+
+func (s *Shell) GetIntValue(storedAs string) (result int, found bool) {
+	result, found = s.intQas[storedAs]
+	return
+}
+
+func (s *Shell) GetFloatValue(storedAs string) (result float64, found bool) {
+	result, found = s.floatQas[storedAs]
+	return
 }
 
 func (s *Shell) getFlow() *Flow {
@@ -443,6 +496,34 @@ func (s *Shell) handleAnswer(command string) bool {
 		return false
 	}
 	s.qas[s.awaitingAnswer] = command
+	return true
+}
+
+func (s *Shell) handleIntAnswer(command string) bool {
+	if !s.handleAnswer(command) {
+		return false
+	}
+	// Try convert to int 64
+	result, err := strconv.Atoi(command)
+	if err != nil {
+		s.waitForShellOutput("int_conversion", "> Please enter an integer e.g. 34", false, false)
+		return false
+	}
+	s.intQas[s.awaitingAnswer] = result
+	return true
+}
+
+func (s *Shell) handleFloatAnswer(command string) bool {
+	if !s.handleAnswer(command) {
+		return false
+	}
+	// Try convert to int 64
+	result, err := strconv.ParseFloat(command, 64)
+	if err != nil {
+		s.waitForShellOutput("float_conversion", "> Please enter a number e.g. 3.1415", false, false)
+		return false
+	}
+	s.floatQas[s.awaitingAnswer] = result
 	return true
 }
 
