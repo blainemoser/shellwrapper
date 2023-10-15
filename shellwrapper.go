@@ -418,6 +418,9 @@ func (s *Shell) jitter(j *jitter) {
 }
 
 func (s *Shell) greeting() {
+	if len(s.greeter) < 1 {
+		return
+	}
 	msg := s.greeter
 	var longestLine int
 	var line string
