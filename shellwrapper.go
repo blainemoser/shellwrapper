@@ -584,7 +584,7 @@ func (s *Shell) bufferError(err error) {
 		s.UserInput <- ""
 		return
 	default:
-		s.waitForShellOutput(errorUUID, fmt.Sprintf("> An error occured (%s), please try again", err.Error()), false, true)
+		s.waitForShellOutput(errorUUID, fmt.Sprintf("> An error occured (%s)", err.Error()), false, true)
 	}
 }
 
